@@ -18,12 +18,20 @@ export async function scrapeOverview(argv: any) {
         logger.log(`Writing data to [${outputDir}]`);
     }
 
+    let headless = argv.headless === 'true';
+    if (!['true', 'false'].includes(argv.headless)) {
+        headless = true;
+        logger.log(
+          `[--headless] is not set/valid, defaulting to [${headless}] (options: true | false)`
+        );
+    }
+
     const downloader = new Downloader(
         1,
         argv.accountId,
     );
 
-    await downloader.init();
+    await downloader.init(headless);
 
     const loginProgress = ora(`Logging In (see popped Chromium window)`).start();
     await downloader.login();

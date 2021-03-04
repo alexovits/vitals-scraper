@@ -17,11 +17,27 @@ export class Downloader {
         this.accountId = accountId;
     }
 
-    public async init() {
+    public safeStringify = (obj: Object, indent = 2) => {
+        let cache: Array<any> = [];
+        const retVal = JSON.stringify(
+          obj,
+          (key, value) =>
+            typeof value === "object" && value !== null
+              ? cache.includes(value)
+              ? undefined // Duplicate reference found, discard key
+              : cache.push(value) && value // Store value in our collection
+              : value,
+          indent
+        );
+        cache = null;
+        return retVal;
+    };
+
+    public async init(headless: boolean) {
         this.browser = await puppeteer.launch({
-            headless: false,
+            headless,
             userDataDir: './data',
-            defaultViewport: null
+            defaultViewport: null,
         });
 
         for (let i = 0; i < this.parallel; i++) {
@@ -35,7 +51,10 @@ export class Downloader {
         const page = await this.claimPage();
         try {
             await page.goto('https://play.google.com/apps/publish');
-            await page.waitForResponse(response => response.url().includes('paymentsAlert'), { timeout: null });
+            await page.waitForResponse(response => {
+                console.log('Original check:', response.url().includes('developer'));
+                return response.url().includes('developer');
+            }, { timeout: null });
             await pageLoadFinished(page);
         } finally {
             this.releasePage(page);
@@ -46,9 +65,10 @@ export class Downloader {
         try {
             await page.goto(`https://play.google.com/console/u/0/developers/${this.accountId}/app-list`);
             await pageLoadFinished(page);
+            await sleep(2000);
             await page.waitForSelector(`pagination-bar dropdown-button material-icon`);
             await page.click('pagination-bar dropdown-button material-icon');
-            await sleep(1000);
+            await sleep(2000);
             await page.waitForSelector(`material-select-dropdown-item:last-child`);
             await page.click('material-select-dropdown-item:last-child');
         } catch (err) {
@@ -58,14 +78,65 @@ export class Downloader {
         }
     }
 
+    public async loadCrashANRList(page: Page, appId: String, daysToScrape: number): Promise<any> {
+        // https://play.google.com/console/u/0/developers/8109871065813726294/app/4972842327387852418/vitals/crashes?installedFrom=PLAY_STORE&days=1
+        try {
+            await page.goto(`https://play.google.com/console/u/0/developers/${this.accountId}/app/${appId}/vitals/crashes?installedFrom=PLAY_STORE&days=${daysToScrape}`);
+            await pageLoadFinished(page);
+            await page.waitForSelector(`pagination-bar dropdown-button material-icon`);
+            await page.click('pagination-bar dropdown-button material-icon');
+            await sleep(2000);
+            await page.waitForSelector(`material-select-dropdown-item:last-child`);
+            await page.click('material-select-dropdown-item:last-child');
+            await sleep(3000);
+        } catch (err) {
+            logger.warn(`Failed to loadCrashANRList, trying again`);
+            await sleep(1000);
+            return this.loadCrashANRList(page, appId, daysToScrape);
+        }
+    }
+
+    public async getCrashOverview(appId: String, daysToScrape: number) {
+        const page = await this.claimPage();
+        try {
+            await this.loadCrashANRList(page, appId, daysToScrape);
+            page.on("console", msg => console.log("PAGE LOG:", msg.text()));
+            const packageDetails = await page.$$eval('ess-table .particle-table-row', (rows) => {
+                // Here every row is a Crash/ANR row
+                // console.log(`DEBUG - number of rows: ${rows.length}`);
+                return rows.map(row => {
+                    const cols = Array.from(row.querySelectorAll('ess-cell')).filter(cell => cell.textContent);
+                    // console.log(`DEBUG - number of cols: ${cols.length}`);
+                    // $<name> doesnt have any role here, it's arbitrary not a special syntax
+                    const [$crashName, $type, $new, $occur, $impact, $latest, $crashPage] = cols;
+                    return {
+                        error: `${$crashName.querySelector('.main-text-line').textContent.trim()} - ${$crashName.querySelector('.secondary-line').textContent.trim()}`,
+                        type: $type.textContent.trim(),
+                        occurrences: $occur.textContent.trim(),
+                        impactedUsers: $impact.textContent.trim(),
+                        lastOccurred: $latest.textContent.trim(),
+                        crashPage: $crashPage.querySelector('a').href,
+                    };
+                });
+            });
+            return packageDetails;
+        } finally {
+            this.releasePage(page);
+        }
+    }
+
     public async getOverview() {
         const page = await this.claimPage();
         try {
             await this.loadAppList(page);
+            page.on("console", msg => console.log("PAGE LOG:", msg.text()));
             const packageDetails = await page.$$eval('ess-table .particle-table-row', (rows) => {
+                // logger.warn('Whats goin on dad!');
                 return rows.map(row => {
                     const cols = Array.from(row.querySelectorAll('ess-cell')).filter(cell => cell.textContent);
-
+                    // the a in ess-table has a href like:
+                    // https://play.google.com/console/u/0/developers/<account-id>/app/<app-id>/app-dashboard'
+                    const appSiteHref = Array.from(row.querySelectorAll('a')).filter(cell => cell.href.includes('console/u/0/developers'))[0].href;
                     const [$appName, $activeInstalls, $status, $lastUpdate] = cols;
                     return {
                         appName: $appName.querySelector('.line').textContent.trim(),
@@ -73,6 +144,7 @@ export class Downloader {
                         activeInstalls: Number($activeInstalls.textContent.replace(/[^0-9]/g, '')),
                         lastUpdate: $lastUpdate.textContent.trim(),
                         status: $status.textContent.trim(),
+                        appId: appSiteHref.match('app/(.*)/app-dashboard')[1],
                     };
                 });
             });
