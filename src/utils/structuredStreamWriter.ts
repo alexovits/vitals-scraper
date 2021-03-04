@@ -40,7 +40,7 @@ export class StructuredStreamWriter {
         this.fileStream.write(itemString, (err) => err ? reject(err) : resolve());
       } else if (this.format === StructuredFormat.CSV) {
         if (this.columns) {
-          const itemString = this.columns.map(key => item[key]).join(',') + '\n';
+          const itemString = this.columns.map(key => `"${item[key]}"`).join(',') + '\n';
           this.fileStream.write(itemString, (err) => err ? reject(err) : resolve());
         } else {
           throw new Error(`Writing a CSV file, but don't have columns`);
@@ -62,7 +62,6 @@ export class StructuredStreamWriter {
         throw new Error(`Writing a CSV file, but don't have columns`);
       }
     }
-
     this.fileStream.write(headerString);
   }
 
