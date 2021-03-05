@@ -3,12 +3,7 @@ import ora from 'ora';
 import * as path from 'path';
 import { Downloader } from './Downloader';
 import moment from 'moment';
-import {
-    StructuredStreamWriter,
-    StructuredFormat,
-} from './utils/structuredStreamWriter';
-
-const validErrorTypes = ['crash', 'ANR'];
+import { StructuredStreamWriter, StructuredFormat } from './utils/structuredStreamWriter';
 
 export interface CrashData {
     error: string;
@@ -27,36 +22,13 @@ export async function scrapeErrors(argv: any) {
         throw new Error(`No [--packageName] set, this is required`);
     }
 
-    const errorTypes: string[] = (argv.errorType || 'crash,ANR').split(',');
-    if (!argv.errorType) {
-        logger.log(
-            `[--errorType] is not set, defaulting to [${errorTypes.join(
-                ','
-            )}] (options: crash,ANR)`
-        );
-    } else {
-        const invalidErrorType = errorTypes.find(
-            (et: string) => !validErrorTypes.includes(et)
-        );
-        if (invalidErrorType) {
-            throw new Error(
-                `An invalid errorType was specified (${invalidErrorType}), valid options are [crash,ANR]`
-            );
-        }
-    }
-
     const verbose = argv.verbose || false;
     if (!argv.verbose) {
         logger.log(`[--verbose] is not set, defaulting to [${verbose}]`);
     }
     (process as any).verbose = verbose;
 
-    const parallel = argv.parallel || 1;
-    if (!argv.parallel) {
-        logger.log(`[--parallel] is not set, defaulting to [${parallel}]`);
-    }
-
-    const daysToScrape = argv.days || 7;
+    const daysToScrape = argv.days || 30;
     if (!argv.days) {
         logger.log(`[--days] is not set, defaulting to [${daysToScrape}]`);
     } else {
@@ -64,16 +36,12 @@ export async function scrapeErrors(argv: any) {
     }
 
     if (![1, 7, 14, 30, 60].includes(daysToScrape)) {
-        throw new Error(
-            `[--days=${argv.days}] is invalid, please supply one of: [1, 7, 14, 30, 60]`
-        );
+        throw new Error(`[--days=${argv.days}] is invalid, please supply one of: [1, 7, 14, 30, 60]`);
     }
 
     const format = argv.format || 'json';
     if (!argv.format) {
-        logger.log(
-            `[--format] is not set, defaulting to [${format}] (options: json | csv)`
-        );
+        logger.log(`[--format] is not set, defaulting to [${format}] (options: json | csv)`);
     }
     if (!['json', 'csv'].includes(format)) {
         throw new Error(`Currently supports csv or json`);
@@ -82,9 +50,7 @@ export async function scrapeErrors(argv: any) {
     let headless = argv.headless === 'true';
     if (!['true', 'false'].includes(argv.headless)) {
         headless = true;
-        logger.log(
-          `[--headless] is not set/valid, defaulting to [${headless}] (options: true | false)`
-        );
+        logger.log(`[--headless] is not set/valid, defaulting to [${headless}] (options: true | false)`);
     }
 
     let outputDir;
@@ -96,30 +62,9 @@ export async function scrapeErrors(argv: any) {
         logger.log(`Writing data to [${outputDir}]`);
     }
 
-    let numExceptions: 'all' | number = 'all';
-    if (!argv.numExceptions) {
-        logger.log(`[--numExceptions] is not set, using [${numExceptions}]`);
-    } else {
-        const nE = Number(argv.numExceptions);
-        if (isNaN(nE)) {
-            if (argv.numExceptions !== 'all') {
-                logger.warn(
-                    `[--numExceptions] is invalid, please set a number or "all"`
-                );
-            } else {
-                numExceptions = argv.numExceptions;
-            }
-        } else {
-            numExceptions = nE;
-        }
-        logger.log(
-            `[--numExceptions] specified, [${numExceptions}] will be retrieved`
-        );
-    }
-
     console.log('\n\n');
 
-    const downloader = new Downloader(parallel, argv.accountId);
+    const downloader = new Downloader(1, argv.accountId);
 
     await downloader.init(headless);
 
@@ -129,9 +74,7 @@ export async function scrapeErrors(argv: any) {
 
     const availablePackages = await downloader.getOverview();
     // Remove any suspended and draft apps from the set of available packages as these aren't in use.
-    const publishedPackages = availablePackages.filter(
-        (p) => p.status === 'Production'
-    );
+    const publishedPackages = availablePackages.filter((p) => p.status === 'Production');
     const publishedPackageNames = publishedPackages.map((p) => p.packageName);
     if (verbose) {
         console.log('Available packages: ', availablePackages);
@@ -143,9 +86,7 @@ export async function scrapeErrors(argv: any) {
         for (const packageName of packageNamesToScrape) {
             if (!publishedPackageNames.includes(packageName)) {
                 downloader.close();
-                throw new Error(
-                    `Package name [${packageName}]is not available`
-                );
+                throw new Error(`Package name [${packageName}]is not available`);
             }
         }
     }
@@ -153,26 +94,14 @@ export async function scrapeErrors(argv: any) {
     await downloader.login();
 
     for (const packageName of packageNamesToScrape) {
-        const packageInfos = availablePackages.find(
-            (value, index) => value.packageName === packageName
-        );
-        console.log(
-            `Scraping package ${packageName} ${JSON.stringify(packageInfos)}`
-        );
-        const crashOverview = await downloader.getCrashOverview(
-            packageInfos.appId,
-            daysToScrape
-        );
+        const packageInfos = availablePackages.find((value, index) => value.packageName === packageName);
+        console.log(`Scraping package ${packageName} ${JSON.stringify(packageInfos)}`);
+        const crashOverview = await downloader.getCrashOverview(packageInfos.appId, daysToScrape);
         if (crashOverview.length > 0) {
             if (verbose) {
                 console.log('CRASH OVERVIEW', crashOverview);
             }
-            await createGeneralErrorReport(
-              outputDir,
-              packageName,
-              format,
-              crashOverview
-            );
+            await createGeneralErrorReport(outputDir, packageName, format, crashOverview);
         } else {
             console.log('No errors found');
         }
@@ -197,32 +126,19 @@ async function createGeneralErrorReport(
     format: StructuredFormat,
     crashOverview: CrashData[]
 ) {
-    const outFilePath = path.join(
-        outputDir,
-        `android-vitals-${packageName}_${Date.now()}.${format}`
-    );
+    const outFilePath = path.join(outputDir, `android-vitals-${packageName}_${Date.now()}.${format}`);
 
-    const clustersProgress = ora(
-        `[${packageName}] Getting and writing vitals info to [${outFilePath}]`
-    ).start();
+    const clustersProgress = ora(`[${packageName}] Getting and writing vitals info to [${outFilePath}]`).start();
 
     try {
-        const fileWriter = new StructuredStreamWriter(
-            format,
-            outFilePath,
-            Object.keys(crashOverview[0])
-        );
+        const fileWriter = new StructuredStreamWriter(format, outFilePath, Object.keys(crashOverview[0]));
         await Promise.all(
             crashOverview.map(async (crashData) => {
                 try {
                     crashData.lastOccurred = convertLastOccurredStringToDate(crashData.lastOccurred);
                     return fileWriter.writeItem(crashData);
                 } catch (err) {
-                    console.error(
-                        `Failed to get error cluster, skipping:`,
-                        { packageName },
-                        err
-                    );
+                    console.error(`Failed to get error cluster, skipping:`, { packageName }, err);
                     return Promise.resolve();
                 }
             })
